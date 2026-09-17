@@ -2,7 +2,6 @@ Yandex Maps Reviews Parser
 
 Приложение для сбора и анализа отзывов организаций с Яндекс Карт: Laravel (API + парсер) + Vue 3 (SPA). Тестовое задание: подключить карточку организации, вытянуть все доступные отзывы (~600), рейтинг и счётчики.
 
-
 1. Что умеет
 
 - Авторизация (Sanctum, SPA-токены); сид-пользователь создаётся сидером (admin@local.test / password).
@@ -14,8 +13,7 @@ Yandex Maps Reviews Parser
 - Идемпотентность: повторный парсинг не создаёт дубли (совпадение по organization_id + external_id); исчезнувшие из источника помечаются is_deleted, физически не удаляются.
 - Устойчивость к проблемам источника: капча и смена разметки детектируются явно (статусы captcha / failed, last_error, лог).
 - Очередь: парсинг в job с ретраями (tries = 3, фиксированный backoff = 10 c).
-- Тесты: php artisan test - 16 тестов, 39 assertions (см. раздел Тесты).
-
+- Тесты: php artisan test - 17 тестов, 44 assertions (см. раздел Тесты).
 
 2. Стек (установленные версии)
 
@@ -25,7 +23,6 @@ Yandex Maps Reviews Parser
 - БД: MySQL 8 (рабочая); SQLite подходит для тестов (DB_CONNECTION=sqlite)
 - Очередь: Laravel Queue, driver database
 - Деплой: php artisan serve / shared-хостинг; docker-compose.yml в репозитории (не тестировался - см. ограничения)
-
 
 3. Архитектура парсинга
 
@@ -71,7 +68,6 @@ URL из формы
 - App\Console\Commands\ParseOrganizationCommand - php artisan parse:org {url} [--org-id=ID]
 - App\Services\YandexParserService - legacy-адаптер поверх YandexMapsParser (возвращает массив)
 
-
 4. Обоснование выбора подхода к парсингу
 
 Рассматривались два варианта:
@@ -90,7 +86,6 @@ URL из формы
 - HTTP 403/429 или showcaptcha в HTML -> CaptchaDetectedException (одиночное слово captcha в JS-конфиге игнорим - даёт ложные срабатывания);
 - во всех случаях: статус организации failed/captcha, текст в last_error, запись в лог, run помечается failed. Пустой массив молча не возвращается.
 
-
 5. Анти-бан
 
 Реализовано:
@@ -100,7 +95,6 @@ URL из формы
 - при 403/429 - исключение -> ретраи очереди (tries = 3, backoff = 10 c), затем статус failed/captcha.
 
 Для продакшена (тысячи карточек): ротация прокси, распределённая очередь, парсинг в офф-пик - см. Запланировано.
-
 
 6. База данных
 
@@ -113,7 +107,6 @@ URL из формы
 - jobs, cache и др.: стандартные таблицы Laravel (очередь database)
 
 Идемпотентность: совпадение по organization_id + external_id; у SSR-разметки нет стабильного ID отзыва, поэтому external_id = sha1(author + text + rating). Следствие: правка отзыва источником (смена текста/оценки) меняет хеш - такой отзыв проявится как пара исчез + новый, а не как review_changes. Полевые правки было-стало фиксируются только для отзывов, опознанных по неизменному хешу.
-
 
 7. API
 
@@ -131,7 +124,6 @@ URL из формы
 - GET /api/parse-runs/{id} - детали рана: changes (было-стало) + deleted
 
 Фронтенд (resources/js: app.js, components/{Login,Settings,Reviews,History}.vue, вьюха app.blade.php): нативный fetch, токен в localStorage, в vite.config.js алиас vue -> vue.esm-bundler (нужен runtime-компилятор для template корневого компонента).
-
 
 8. Запуск локально
 
@@ -165,7 +157,6 @@ docker-compose exec app php artisan migrate --seed
 
 Фактический состав docker-compose.yml: app (сборка из Dockerfile, php artisan serve на :8000), db (mysql:8.0, проброшен на :3307), redis. Отдельных сервисов nginx и worker в файле нет; Dockerfile ставит PHP 8.4 + Composer-зависимости, собирает фронт и генерирует ключ.
 
-
 9. Деплой на shared-хостинг
 
 1. Залить проект, docroot сайта указать на .../public.
@@ -180,26 +171,28 @@ php artisan config:cache && php artisan route:cache && php artisan view:cache
 ```
 
 4. Frontend: npm run build выполнять локально, на сервер заливать готовый public/build (плюс public/build/manifest.json).
-5. Очередь без демона - cron (--stop-when-empty поддерживается):
+5. Планировщик + одна cron-строка в панели хостинга (ставится один раз):
 
 ```
-* * * * * cd ~/<project> && php artisan queue:work --stop-when-empty >> /dev/null 2>&1
+* * * * * cd ~/yandex-parser && php artisan schedule:run >> /dev/null 2>&1
 ```
+
+Расписание в routes/console.php: раз в минуту поднимается воркер `queue:work --stop-when-empty --tries=3 --timeout=300` - он выгребает очередь и завершается; демона нет. Повторный запуск при живом воркере блокируется мутексом withoutOverlapping (хранится в кэше, CACHE_STORE=database). Флаг --timeout=300 рассчитан на парсинг большой карточки (~14 страниц с паузами 1.5 c).
+
+Локальная разработка: для мгновенного выполнения джоб достаточно `php artisan queue:work` в отдельном терминале, либо поставь в локальном .env `QUEUE_CONNECTION=sync` - тогда джоба выполняется прямо при сохранении ссылки, воркер не нужен.
 
 6. HTTPS: выпустить сертификат в панели хостинга.
-
 
 10. Тесты
 
 ```
-php artisan test   # sqlite :memory:, сейчас: 16 тестов, 39 assertions - все зелёные
+php artisan test   # sqlite :memory:, сейчас: 17 тестов, 44 assertions - все зелёные
 ```
 
 - tests/Unit/UrlNormalizerTest.php (7): canonical со/без slug, map-ссылка с poi[uri], голая схема ymapsbm1://, битая ссылка и поиск без ID (исключения), один ID из всех форматов
 - tests/Unit/YandexMapsParserTest.php (1): HTML-фикстура отзыва: Schema.org-селекторы, parseRussianDate
-- tests/Feature/ReviewFiltersTest.php (6): скрытие удалённых по умолчанию, only_new, only_changed, show_deleted_only, сортировка new_first, история ранов
+- tests/Feature/ReviewFiltersTest.php (7): скрытие удалённых по умолчанию, only_new, only_changed, show_deleted_only, сортировка new_first, история прогонов, доступность фильтров изменений только со второго прогона
 - tests/{Unit,Feature}/ExampleTest.php: дефолтные заглушки Laravel
-
 
 11. Структура проекта
 
@@ -221,7 +214,6 @@ database/migrations/{0001_01_01_*, 2026_09_15_00000{1,2,3}_*, 2026_09_15_205800_
 tests/{Unit/{YandexMapsParserTest,UrlNormalizerTest}, Feature/ReviewFiltersTest}.php
 docker-compose.yml, Dockerfile
 ```
-
 
 12. Известные ограничения и запланировано
 
