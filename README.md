@@ -174,8 +174,10 @@ php artisan config:cache && php artisan route:cache && php artisan view:cache
 5. Планировщик + одна cron-строка в панели хостинга (ставится один раз):
 
 ```
-* * * * * cd ~/yandex-parser && php artisan schedule:run >> /dev/null 2>&1
+* * * * * cd /home/cz549031/yandex_card && php artisan schedule:run >> /dev/null 2>&1
 ```
+
+Путь - абсолютный, без `~` (папка проекта на хостинге: Home > yandex_card). Один раз проверь в SSH: `echo $HOME` (если home не /home/cz549031 - подставь свой) и `php -v` - если консольный PHP старее 8.4, замени `php` в строке на полный путь до бинарника нужной версии.
 
 Расписание в routes/console.php: раз в минуту поднимается воркер `queue:work --stop-when-empty --tries=3 --timeout=300` - он выгребает очередь и завершается; демона нет. Повторный запуск при живом воркере блокируется мутексом withoutOverlapping (хранится в кэше, CACHE_STORE=database). Флаг --timeout=300 рассчитан на парсинг большой карточки (~14 страниц с паузами 1.5 c).
 
