@@ -17,7 +17,8 @@
 
     <div class="bg-white rounded-xl border border-stone-200 p-6 mt-6">
       <h3 class="text-lg font-bold mb-3">Подключённые организации</h3>
-      <div v-if="orgsLoading" class="text-stone-500 text-sm">Загрузка...</div>
+      <div v-if="orgsLoading" role="status" class="text-stone-500 text-sm">Загрузка...</div>
+      <p v-if="orgsError" role="alert" class="text-red-600 text-sm">{{ orgsError }}</p>
       <div v-for="o in orgs" :key="o.id" class="flex items-center gap-3 py-3 border-b border-stone-100 last:border-0">
         <div class="flex-1 min-w-0">
           <div class="font-semibold truncate">{{ o.name }}</div>
@@ -26,7 +27,8 @@
             <span :class="['inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium', pillClass(o.status)]">
               <span class="w-1.5 h-1.5 rounded-full bg-current"></span>{{ statusLabel(o.status) }}
             </span>
-            <span class="text-stone-500 tnum">★ {{ fmt(o.average_rating) }} · оценок {{ o.total_ratings }} · отзывов {{ o.total_reviews }}</span>
+            <span v-if="hasMetrics(o)" class="text-stone-500 tnum">★ {{ fmt(o.average_rating) }} · оценок {{ o.total_ratings }} · отзывов {{ o.total_reviews }}</span>
+            <span v-else class="text-sm text-stone-500">{{ metricsMessage(o) }}</span>
           </div>
           <div v-if="o.last_error" class="text-sm text-red-600 mt-1">{{ shortError(o.last_error) }}</div>
         </div>
@@ -34,8 +36,9 @@
     </div>
 
     <div v-if="org" class="bg-white rounded-xl border border-stone-200 p-6 mt-6">
-      <h3 class="text-lg font-bold mb-3">Организация</h3>
-      <div class="grid grid-cols-3 gap-3">
+      <h3 class="text-lg font-bold mb-3">{{ org.name || 'Организация' }}</h3>
+      <p v-if="!hasMetrics(org)" role="status" class="text-sm text-stone-600">{{ metricsMessage(org) }}</p>
+      <div v-else class="grid grid-cols-3 gap-3">
         <div class="p-4 bg-yandex/5 rounded-xl text-center">
           <div class="text-xs text-stone-500 mb-1">Рейтинг</div>
           <div class="text-2xl font-extrabold text-yandex tnum">{{ fmt(org.average_rating) }}</div>
@@ -54,7 +57,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { pillClass, statusLabel } from '../status.js';
 const url = ref('');
 const loading = ref(false);
@@ -63,18 +66,48 @@ const messageClass = ref('text-stone-600 bg-stone-100 border border-stone-200');
 const org = ref(null);
 const orgs = ref([]);
 const orgsLoading = ref(true);
+const orgsError = ref('');
+let pollTimer = null;
+let listController = null;
+let disposed = false;
 
 function fmt(v) { return (v === null || v === undefined) ? '-' : Number(v).toFixed(1).replace('.', ','); }
 function shortError(e) { return e && e.length > 140 ? e.slice(0, 140) + '…' : e; }
+function hasMetrics(o) { return o.status === 'success'; }
+function metricsMessage(o) {
+  if (o.status === 'pending') return 'Парсинг в очереди. Показатели появятся после завершения.';
+  if (o.status === 'parsing') return 'Собираем данные. Показатели обновятся автоматически.';
+  if (o.status === 'captcha') return 'Яндекс запросил проверку. Данные пока недоступны.';
+  return 'Не удалось получить данные. Попробуйте запустить парсинг ещё раз.';
+}
 
-async function loadOrgs() {
-  orgsLoading.value = true;
+async function loadOrgs(silent = false) {
+  clearTimeout(pollTimer);
+  listController?.abort();
+  const controller = new AbortController();
+  listController = controller;
+  if (!silent) orgsLoading.value = true;
   try {
     const token = localStorage.getItem('token');
-    const res = await fetch('/api/organizations', { headers: { Authorization: `Bearer ${token}` } });
-    orgs.value = await res.json();
+    const res = await fetch('/api/organizations', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error('Не удалось обновить данные организаций. Повторим автоматически.');
+    const data = await res.json();
+    if (!Array.isArray(data)) throw new Error('Получен некорректный ответ сервера.');
+    if (disposed || controller.signal.aborted) return;
+    orgs.value = data;
+    if (org.value) org.value = data.find(o => o.id === org.value.id) || org.value;
+    orgsError.value = '';
+  } catch (e) {
+    if (disposed || controller.signal.aborted) return;
+    orgsError.value = e.message || 'Ошибка сети. Повторим обновление автоматически.';
   } finally {
-    orgsLoading.value = false;
+    if (!disposed && !controller.signal.aborted) {
+      orgsLoading.value = false;
+      pollTimer = setTimeout(() => loadOrgs(true), 3000);
+    }
   }
 }
 
@@ -107,4 +140,9 @@ async function saveLink() {
 }
 
 onMounted(loadOrgs);
+onUnmounted(() => {
+  disposed = true;
+  clearTimeout(pollTimer);
+  listController?.abort();
+});
 </script>

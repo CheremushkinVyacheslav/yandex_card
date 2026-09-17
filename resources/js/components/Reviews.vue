@@ -1,8 +1,17 @@
 <template>
   <div class="w-full max-w-4xl mx-auto mt-10 px-4 pb-10">
-    <div class="mb-4">
+    <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2">
       <h2 class="text-2xl font-extrabold tracking-tight">Отзывы</h2>
-      <p v-if="orgInfo" class="text-sm text-stone-500 mt-0.5">{{ orgInfo.name }}</p>
+      <div v-if="orgOptions.length > 1" class="w-full sm:w-72 sm:ml-auto">
+        <label class="sr-only" for="reviews-org">Выбор организации</label>
+        <CustomSelect
+          id="reviews-org"
+          v-model="selectedOrgId"
+          :aria-label="'Выбор организации'"
+          :options="orgOptions"
+        />
+      </div>
+      <p v-else-if="orgInfo" class="w-full sm:w-auto text-sm text-stone-500 sm:ml-auto truncate">{{ orgInfo.name }}</p>
     </div>
 
     <div v-if="loading && !summary" class="bg-white rounded-xl border border-stone-200 p-8 text-stone-500 text-sm">Загрузка...</div>
@@ -65,13 +74,15 @@
           :class="['w-11 h-11 rounded-lg text-lg leading-none transition inline-flex items-center justify-center', ratingFilter === s ? 'bg-yandex text-white font-bold shadow' : 'text-stone-500 hover:text-yandex hover:bg-stone-100']">★</button>
         <button v-if="ratingFilter" @click="toggleRating(null)" class="ml-1 min-h-11 px-2 text-sm text-stone-500 hover:text-yandex underline">сброс</button>
       </div>
-      <label class="sr-only" for="reviews-sort">Сортировка отзывов</label>
-      <select id="reviews-sort" v-model="sortOrder" class="px-3 py-2 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-yandex">
-        <option value="date">По дате (как в источнике)</option>
-        <option value="new_first">Сначала новые</option>
-        <option value="old">Сначала старые</option>
-        <option value="rating">По оценке</option>
-      </select>
+      <div class="w-full sm:w-56">
+        <label class="sr-only" for="reviews-sort">Сортировка отзывов</label>
+        <CustomSelect
+          id="reviews-sort"
+          v-model="sortOrder"
+          :aria-label="'Сортировка отзывов'"
+          :options="sortOptions"
+        />
+      </div>
       <div class="flex-1 min-w-[180px] relative">
         <label class="sr-only" for="reviews-search">Поиск по тексту отзывов</label>
         <input id="reviews-search" v-model="searchQuery" type="search" placeholder="Поиск по тексту отзывов…" class="w-full px-3 py-2 pl-9 border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yandex focus:border-transparent" />
@@ -126,6 +137,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
 import { pillClass, statusLabel } from '../status.js';
+import CustomSelect from './CustomSelect.vue';
 
 const reviews = ref([]);
 const loading = ref(true);
@@ -134,6 +146,8 @@ const pagination = ref(null);
 const summary = ref(null);
 const orgId = ref(null);
 const orgInfo = ref(null);
+const orgs = ref([]);
+const selectedOrgId = ref(null);
 const ratingFilter = ref(null);
 const sortOrder = ref('date');
 const searchQuery = ref('');
@@ -147,6 +161,20 @@ const newCount = ref(0);
 const changedCount = ref(0);
 const listTop = ref(null);
 let searchTimer = null;
+
+const sortOptions = [
+  { value: 'date', label: 'По дате (как в источнике)' },
+  { value: 'new_first', label: 'Сначала новые' },
+  { value: 'old', label: 'Сначала старые' },
+  { value: 'rating', label: 'По оценке' },
+];
+
+const orgOptions = computed(() =>
+  orgs.value.map(o => ({
+    value: o.id,
+    label: (o.status === 'success' ? '★ ' : '') + (o.name || 'Организация') + (o.total_reviews ? ' · ' + o.total_reviews : ''),
+  }))
+);
 
 const distTotal = computed(() =>
   Object.values(summary.value?.distribution || {}).reduce((a, b) => a + Number(b), 0)
@@ -200,6 +228,13 @@ async function loadPage(page = 1, scroll = false) {
   error.value = '';
   try {
     const token = localStorage.getItem('token');
+    if (!orgs.value.length) {
+      const ores = await fetch('/api/organizations', { headers: { Authorization: `Bearer ${token}` } });
+      if (ores.ok) {
+        orgs.value = await ores.json();
+        if (!orgId.value && orgs.value.length) orgId.value = Number(orgs.value[0].id);
+      }
+    }
     if (!orgId.value) {
       const sres = await fetch('/api/settings', { headers: { Authorization: `Bearer ${token}` } });
       if (sres.ok) {
@@ -252,6 +287,12 @@ onMounted(() => {
   loadPage(1);
 });
 
+watch(selectedOrgId, (val) => {
+  if (val && val !== orgId.value) {
+    orgId.value = val;
+    loadPage(1, true);
+  }
+});
 watch([ratingFilter, sortOrder, onlyNew, onlyChanged, showDeleted], () => loadPage(1, true));
 watch(searchQuery, () => {
   clearTimeout(searchTimer);

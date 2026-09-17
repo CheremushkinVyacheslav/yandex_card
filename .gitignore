@@ -3,12 +3,8 @@
 .env
 .env.backup
 .env.production
-.kilo/
 .phpactor.json
 .phpunit.result.cache
-.playwright-mcp/
-/.codex
-/.cursor/
 /.idea
 /.nova
 /.phpunit.cache
