@@ -1,0 +1,27 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+
+@theme {
+    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+        'Segoe UI Symbol', 'Noto Color Emoji';
+
+    /* Фирменный красный Яндекса */
+    --color-yandex: #fc3f1d;
+}
+
+/* Видимый фокус с клавиатуры — фирменный акцент */
+:where(a, button):focus-visible {
+    outline: 2px solid var(--color-yandex);
+    outline-offset: 2px;
+}
+
+/* Ровные цифры в метриках */
+.tnum {
+    font-variant-numeric: tabular-nums;
+}
+
+::selection {
+    background: color-mix(in srgb, var(--color-yandex) 25%, transparent);
+}
