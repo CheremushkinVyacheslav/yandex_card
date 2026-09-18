@@ -157,33 +157,53 @@ docker-compose exec app php artisan migrate --seed
 
 Фактический состав docker-compose.yml: app (сборка из Dockerfile, php artisan serve на :8000), db (mysql:8.0, проброшен на :3307), redis. Отдельных сервисов nginx и worker в файле нет; Dockerfile ставит PHP 8.4 + Composer-зависимости, собирает фронт и генерирует ключ.
 
-9. Деплой на shared-хостинг
+9. Деплой на shared-хостинг (проверено на Timeweb)
 
-1. Залить проект, docroot сайта указать на .../public.
-2. Создать БД и пользователя в панели, внести креды в .env (DB_*, APP_URL, APP_KEY через шаг 3).
-3. SSH (команды проверены в Laravel 13 проекта):
+Shared-хостинг с фиксированным docroot (public_html) требует адаптаций, которых нет на VPS/Docker. Ниже — проверенная схема.
 
-```
+**Структура на хостинге:**
+- Весь проект в public_html (корень сайта не меняется)
+- index.php в корне public_html с путями без `/../`:
+  ```php
+  require __DIR__.'/vendor/autoload.php';
+  $app = require_once __DIR__.'/bootstrap/app.php';
+  ```
+  (стандартный Laravel-шаблон использует `/../vendor/...`, что не работает при docroot=public_html)
+- Ассеты Vite в `public/build` (не в корне), в .env добавить `ASSET_URL=https://domain.ru/public` — иначе ссылки на CSS/JS вернут 404
+
+**Установка:**
+
+```bash
 composer install --no-dev --optimize-autoloader
 php artisan key:generate
-php artisan migrate --force --seed
-php artisan config:cache && php artisan route:cache && php artisan view:cache
+php artisan migrate --force --seed    # сидер создаст admin@local.test / password
 ```
 
-4. Frontend: npm run build выполнять локально, на сервер заливать готовый public/build (плюс public/build/manifest.json).
-5. Планировщик + одна cron-строка в панели хостинга (ставится один раз):
+Frontend: `npm run build` выполнять локально, на сервер заливать готовый `public/build` (включая `manifest.json`).
 
-```
-* * * * * cd /home/cz549031/yandex_card && php artisan schedule:run >> /dev/null 2>&1
-```
+**Очередь через cron (без демона):**
 
-Путь - абсолютный, без `~` (папка проекта на хостинге: Home > yandex_card). Один раз проверь в SSH: `echo $HOME` (если home не /home/cz549031 - подставь свой) и `php -v` - если консольный PHP старее 8.4, замени `php` в строке на полный путь до бинарника нужной версии.
+Shared-хостинг не поддерживает долгоживущие процессы (`queue:work` без флагов будет убит). Решение — cron поднимает воркер раз в минуту, тот выгребает очередь и завершается.
 
-Расписание в routes/console.php: раз в минуту поднимается воркер `queue:work --stop-when-empty --tries=3 --timeout=300` - он выгребает очередь и завершается; демона нет. Повторный запуск при живом воркере блокируется мутексом withoutOverlapping (хранится в кэше, CACHE_STORE=database). Флаг --timeout=300 рассчитан на парсинг большой карточки (~14 страниц с паузами 1.5 c).
+1. Создать в home-папке файл `~/runner_worker.sh`:
+   ```bash
+   #!/bin/bash
+   cd /home/c/cz549031/public_html || exit 1
+   /opt/php84/bin/php artisan queue:work --stop-when-empty --tries=3 --timeout=300 >> /home/c/cz549031/public_html/cron_worker.log 2>&1
+   ```
+2. `chmod +x ~/runner_worker.sh`
+3. В панели хостинга создать cron-задачу:
+   - Интерпретатор: **Сценарий SH** (не PHP)
+   - Путь до файла: выбрать `~/runner_worker.sh` через кнопку «Настроить» (не вводить руками — иначе путь сломается)
+   - Расписание: каждую минуту
 
-Локальная разработка: для мгновенного выполнения джоб достаточно `php artisan queue:work` в отдельном терминале, либо поставь в локальном .env `QUEUE_CONNECTION=sync` - тогда джоба выполняется прямо при сохранении ссылки, воркер не нужен.
+**Важно:** на Timeweb консольный php по умолчанию = 8.2, а Laravel 13 требует 8.4+. Бинарник нужной версии: `/opt/php84/bin/php`. Проверяй `php -v` в SSH перед командами artisan; если показывает 8.2 — используй полный путь `/opt/php84/bin/php artisan ...` явно (или добавь в PATH: `export PATH=/opt/php84/bin:$PATH`).
 
-6. HTTPS: выпустить сертификат в панели хостинга.
+**HTTPS:** выпустить Let's Encrypt в панели хостинга.
+
+**Локальная разработка:** для мгновенного выполнения джоб достаточно `php artisan queue:work` в отдельном терминале, либо поставь в локальном `.env` `QUEUE_CONNECTION=sync` — тогда джоба выполняется синхронно при сохранении ссылки, воркер не нужен.
+
+**Отличия от VPS/Docker:** на полноценном сервере используется стандартный Laravel-layout (проект в подпапке, корень сайта → public, планировщик через `schedule:run`). Адаптации выше специфичны для shared с фиксированным docroot.
 
 10. Тесты
 
